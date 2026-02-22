@@ -330,6 +330,49 @@ public:
         
         return addr;
     }
+    
+    /// Encode address header (auto-detect domain vs IPv4)
+    static std::vector<uint8_t> encode_address_header(
+        const std::string& host,
+        uint16_t port
+    ) {
+        // Check if it's IPv4
+        unsigned int a, b, c, d;
+        bool is_ipv4 = (sscanf(host.c_str(), "%u.%u.%u.%u", &a, &b, &c, &d) == 4);
+        return encode_address(host, port, !is_ipv4);
+    }
+    
+    /// Decode payloads from encrypted stream
+    static std::vector<uint8_t> decode_payloads(
+        AeadCipher& cipher,
+        const std::vector<uint8_t>& data
+    ) {
+        std::vector<uint8_t> result;
+        size_t offset = 0;
+        
+        while (offset + 2 + AEAD_TAG_SIZE <= data.size()) {
+            // Decrypt length
+            std::vector<uint8_t> len_block(data.begin() + offset, 
+                                           data.begin() + offset + 2 + AEAD_TAG_SIZE);
+            auto len_dec = cipher.decrypt(len_block);
+            if (len_dec.size() != 2) break;
+            
+            uint16_t payload_len = (static_cast<uint16_t>(len_dec[0]) << 8) | len_dec[1];
+            offset += 2 + AEAD_TAG_SIZE;
+            
+            if (offset + payload_len + AEAD_TAG_SIZE > data.size()) break;
+            
+            // Decrypt payload
+            std::vector<uint8_t> payload_block(data.begin() + offset,
+                                               data.begin() + offset + payload_len + AEAD_TAG_SIZE);
+            auto payload_dec = cipher.decrypt(payload_block);
+            
+            result.insert(result.end(), payload_dec.begin(), payload_dec.end());
+            offset += payload_len + AEAD_TAG_SIZE;
+        }
+        
+        return result;
+    }
 
 private:
     CipherType type_;

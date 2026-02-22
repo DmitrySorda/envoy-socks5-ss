@@ -12,6 +12,7 @@
 #include <random>
 #include <thread>
 #include <functional>
+#include <fstream>
 
 #include "shadowsocks/shadowsocks.hpp"
 
@@ -64,6 +65,9 @@ enum class LbPolicy {
     WeightedLatency
 };
 
+// Forward declaration
+std::vector<ServerConfig> load_servers_from_json(const std::string& json);
+
 // ============================================================================
 // Shadowsocks Cluster
 // ============================================================================
@@ -103,7 +107,7 @@ public:
     
     /// Select server based on LB policy
     /// Returns nullptr if no healthy servers available
-    const ServerConfig* select_server() {
+    ServerConfig* select_server() {
         std::lock_guard<std::mutex> lock(mutex_);
         
         if (servers_.empty()) return nullptr;
@@ -243,6 +247,45 @@ public:
         }
         
         return stats;
+    }
+    
+    /// Total servers count
+    size_t total_servers() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return servers_.size();
+    }
+    
+    /// Healthy servers count
+    size_t healthy_servers() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        size_t count = 0;
+        for (const auto& h : health_) {
+            if (h->healthy.load()) count++;
+        }
+        return count;
+    }
+    
+    /// Acquire connection (increment active count) - used when connection is being made
+    void acquire_connection(ServerConfig* server) {
+        // Already done in select_server, but can be used for external tracking
+    }
+    
+    /// Load cluster from keys.json file
+    void load_from_keys_json(const std::string& filepath, LbPolicy policy = LbPolicy::RoundRobin) {
+        config_.lb_policy = policy;
+        
+        std::ifstream file(filepath);
+        if (!file.is_open()) {
+            throw std::runtime_error("Cannot open keys file: " + filepath);
+        }
+        
+        std::string json((std::istreambuf_iterator<char>(file)),
+                          std::istreambuf_iterator<char>());
+        
+        auto loaded = load_servers_from_json(json);
+        for (auto& srv : loaded) {
+            add_server(std::move(srv));
+        }
     }
     
     /// Get individual server health
