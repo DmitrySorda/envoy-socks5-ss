@@ -14,7 +14,7 @@ WORKDIR /build
 COPY . /build/envoy-socks5-filter
 
 # Clone Envoy
-ARG ENVOY_VERSION=1.31.0
+ARG ENVOY_VERSION=1.37.0
 RUN git clone --depth 1 --branch v${ENVOY_VERSION} \
     https://github.com/envoyproxy/envoy.git /build/envoy
 

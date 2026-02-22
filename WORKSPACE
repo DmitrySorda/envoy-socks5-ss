@@ -7,7 +7,7 @@ workspace(name = "envoy_socks5_filter")
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 # Envoy main repository
-ENVOY_VERSION = "1.31.0"
+ENVOY_VERSION = "1.37.0"
 ENVOY_SHA256 = ""  # Will be filled after release
 
 http_archive(
