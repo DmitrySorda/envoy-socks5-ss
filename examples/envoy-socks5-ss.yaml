@@ -1,0 +1,69 @@
+# Envoy configuration for SOCKS5 + Shadowsocks proxy
+#
+# Listens on :1080 for SOCKS5 connections
+# Routes through Shadowsocks servers defined in keys.json
+# Health checks and load balances across healthy servers
+
+admin:
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 9901
+
+static_resources:
+  listeners:
+  - name: socks5_listener
+    address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: 1080
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.socks5_ss
+        typed_config:
+          "@type": type.googleapis.com/socks5_ss.v3.Socks5SsFilter
+          
+          # Statistics prefix
+          stat_prefix: socks5_ss
+          
+          # SOCKS5 authentication
+          auth_required: false
+          
+          # Path to servers config (keys.json format)
+          # Will be hot-reloaded on changes
+          servers_config_path: /etc/envoy/keys.json
+          
+          # Load balancing policy
+          # Options: ROUND_ROBIN, LEAST_CONNECTIONS, RANDOM, WEIGHTED_LATENCY
+          lb_policy: WEIGHTED_LATENCY
+          
+          # Health check interval
+          health_check_interval:
+            seconds: 30
+          
+          # Config file reload check interval
+          config_reload_interval:
+            seconds: 60
+          
+          # Upstream connect timeout
+          connect_timeout:
+            seconds: 5
+          
+          # Idle timeout for established connections
+          idle_timeout:
+            seconds: 3600
+
+# Available statistics (at /stats endpoint):
+#
+# socks5_ss.connections_total        - Total connections received
+# socks5_ss.connections_success      - Successfully established connections  
+# socks5_ss.connections_failed       - Failed connections
+# socks5_ss.auth_success             - Successful authentications
+# socks5_ss.auth_failed              - Failed authentications
+# socks5_ss.upstream_connect_success - Successful upstream connections
+# socks5_ss.upstream_connect_failed  - Failed upstream connections
+# socks5_ss.bytes_sent               - Total bytes sent to upstream
+# socks5_ss.bytes_received           - Total bytes received from upstream
+# socks5_ss.active_connections       - Currently active connections
+# socks5_ss.healthy_servers          - Number of healthy SS servers
+# socks5_ss.upstream_latency_ms      - Upstream connection latency histogram

@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package socks5.v3;
+
+option java_package = "io.envoyproxy.extensions.filters.network.socks5.v3";
+option java_outer_classname = "Socks5FilterProto";
+option java_multiple_files = true;
+option go_package = "github.com/envoyproxy/go-control-plane/extensions/filters/network/socks5/v3;socks5v3";
+
+import "udpa/annotations/status.proto";
+import "udpa/annotations/versioning.proto";
+import "validate/validate.proto";
+
+option (udpa.annotations.file_status).package_version_status = ACTIVE;
+
+// [#protodoc-title: SOCKS5 network filter]
+// SOCKS5 :ref:`configuration overview <config_network_filters_socks5>`.
+// [#extension: envoy.filters.network.socks5]
+
+// Configuration for the SOCKS5 network filter.
+message Socks5Filter {
+  option (udpa.annotations.versioning).previous_message_type = 
+      "socks5.v2.Socks5Filter";
+
+  // The prefix to use when emitting statistics.
+  string stat_prefix = 1 [(validate.rules).string = {min_len: 1}];
+
+  // Whether authentication is required.
+  // If true, the filter will require username/password authentication.
+  // Default is false (no authentication required).
+  bool auth_required = 2;
+
+  // Optional: allowed authentication methods.
+  // If not specified, defaults to NO_AUTH when auth_required=false,
+  // or USERNAME_PASSWORD when auth_required=true.
+  repeated AuthMethod allowed_methods = 3;
+
+  // Optional: upstream cluster to use for proxying connections.
+  // If not specified, connections go directly to the requested destination.
+  string upstream_cluster = 4;
+
+  // Optional: list of allowed destination patterns.
+  // If specified, only destinations matching these patterns are allowed.
+  // Patterns can be IP CIDR blocks or domain wildcards.
+  repeated string allowed_destinations = 5;
+
+  // Optional: list of denied destination patterns.
+  // Deny patterns are evaluated before allow patterns.
+  repeated string denied_destinations = 6;
+
+  // Optional: idle timeout for connections.
+  // If not specified, defaults to 1 hour.
+  google.protobuf.Duration idle_timeout = 7;
+}
+
+// Authentication methods supported by SOCKS5
+enum AuthMethod {
+  // No authentication required (0x00)
+  NO_AUTH = 0;
+  
+  // GSSAPI authentication (0x01)
+  GSSAPI = 1;
+  
+  // Username/Password authentication (0x02, RFC 1929)
+  USERNAME_PASSWORD = 2;
+}
+
+// User credentials for username/password authentication
+message UserCredential {
+  string username = 1 [(validate.rules).string = {min_len: 1, max_len: 255}];
+  string password = 2 [(validate.rules).string = {max_len: 255}];
+}
+
+// Static user database for authentication
+message StaticUserDatabase {
+  repeated UserCredential users = 1;
+}

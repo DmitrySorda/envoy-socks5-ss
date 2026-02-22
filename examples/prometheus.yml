@@ -1,0 +1,67 @@
+# Prometheus configuration for SOCKS5-SS Envoy proxy
+# This config scrapes metrics from Envoy instances
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Alerting rules (optional)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+# Rule files (optional)
+rule_files: []
+
+scrape_configs:
+  # Envoy SOCKS5-SS metrics
+  - job_name: 'envoy-socks5-ss'
+    metrics_path: '/stats/prometheus'
+    static_configs:
+      - targets: ['envoy-socks5-ss:9901']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        regex: '([^:]+):\d+'
+        replacement: '${1}'
+    metric_relabel_configs:
+      # Keep only relevant metrics
+      - source_labels: [__name__]
+        regex: 'envoy_socks5_ss_.*|envoy_cluster_.*|envoy_server_.*|envoy_http_.*'
+        action: keep
+
+  # Multiple Envoy instances (if scaled)
+  - job_name: 'envoy-instances'
+    metrics_path: '/stats/prometheus'
+    static_configs:
+      - targets:
+          - 'envoy-1:9901'
+          - 'envoy-2:9901'
+          - 'envoy-3:9901'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        regex: '([^:]+):\d+'
+        replacement: '${1}'
+
+# Recording rules for SOCKS5-SS metrics
+# Create prometheus/rules/socks5_ss.yml with:
+#
+# groups:
+#   - name: socks5_ss_rules
+#     rules:
+#       - record: socks5_ss:connection_rate_5m
+#         expr: rate(envoy_socks5_ss_connections_total[5m])
+#       
+#       - record: socks5_ss:error_rate_5m
+#         expr: rate(envoy_socks5_ss_errors_total[5m])
+#       
+#       - record: socks5_ss:bytes_rate_5m
+#         expr: rate(envoy_socks5_ss_bytes_tx_total[5m]) + rate(envoy_socks5_ss_bytes_rx_total[5m])
+#       
+#       - record: socks5_ss:avg_latency_5m
+#         expr: rate(envoy_socks5_ss_latency_ms_sum[5m]) / rate(envoy_socks5_ss_latency_ms_count[5m])
+#       
+#       - record: socks5_ss:healthy_servers_ratio
+#         expr: envoy_socks5_ss_healthy_servers / envoy_socks5_ss_total_servers

@@ -1,0 +1,19 @@
+# Build outputs
+cmake_build/
+build/
+bazel-*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Compiled binaries
+*.o
+*.a
+*.so
+*.dylib
+
+# Test outputs
+test_output/

@@ -1,0 +1,171 @@
+name: Build Envoy with SOCKS5-SS Filter
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  ENVOY_VERSION: "1.31.0"
+  
+jobs:
+  build:
+    name: Build Envoy with Extensions
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout filter repository
+      uses: actions/checkout@v4
+      with:
+        path: envoy-socks5-filter
+    
+    - name: Checkout Envoy
+      uses: actions/checkout@v4
+      with:
+        repository: envoyproxy/envoy
+        ref: v${{ env.ENVOY_VERSION }}
+        path: envoy
+        fetch-depth: 1
+    
+    - name: Setup Bazel
+      uses: bazelbuild/setup-bazelisk@v3
+    
+    - name: Mount bazel cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/bazel
+        key: bazel-${{ runner.os }}-${{ hashFiles('envoy/WORKSPACE', 'envoy-socks5-filter/BUILD') }}
+        restore-keys: |
+          bazel-${{ runner.os }}-
+    
+    - name: Copy extension to Envoy
+      run: |
+        # Copy header-only libraries
+        mkdir -p envoy/source/extensions/filters/network/socks5_ss
+        cp -r envoy-socks5-filter/include/* envoy/source/extensions/filters/network/socks5_ss/
+        
+        # Copy filter source
+        cp envoy-socks5-filter/source/extensions/filters/network/socks5_ss/* \
+           envoy/source/extensions/filters/network/socks5_ss/
+        
+        # Copy proto
+        mkdir -p envoy/api/envoy/extensions/filters/network/socks5_ss/v3
+        cp envoy-socks5-filter/proto/socks5_ss.proto \
+           envoy/api/envoy/extensions/filters/network/socks5_ss/v3/
+        
+        # Create BUILD file in Envoy structure
+        cp envoy-socks5-filter/source/extensions/filters/network/socks5_ss/BUILD \
+           envoy/source/extensions/filters/network/socks5_ss/BUILD
+    
+    - name: Register extension
+      run: |
+        # Add our extension to Envoy's extension list
+        cat >> envoy/source/extensions/extensions_build_config.bzl << 'EOF'
+        
+        # SOCKS5 + Shadowsocks extension (added by CI)
+        "envoy.filters.network.socks5_ss": "//source/extensions/filters/network/socks5_ss:config",
+        EOF
+    
+    - name: Build Envoy with extension
+      working-directory: envoy
+      run: |
+        bazel build \
+          --config=ci \
+          --jobs=4 \
+          --local_ram_resources=HOST_RAM*.5 \
+          //source/exe:envoy-static
+      timeout-minutes: 180
+    
+    - name: Run extension tests
+      working-directory: envoy
+      run: |
+        bazel test \
+          --config=ci \
+          --test_output=errors \
+          //source/extensions/filters/network/socks5_ss:all
+      timeout-minutes: 30
+    
+    - name: Extract Envoy binary
+      run: |
+        mkdir -p artifacts
+        cp envoy/bazel-bin/source/exe/envoy-static artifacts/envoy
+        chmod +x artifacts/envoy
+        
+        # Get version
+        artifacts/envoy --version > artifacts/version.txt
+    
+    - name: Upload Envoy binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: envoy-socks5-ss-${{ env.ENVOY_VERSION }}
+        path: artifacts/
+        retention-days: 30
+
+  # Lightweight test without full Envoy build
+  test-standalone:
+    name: Test Standalone Libraries
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev
+    
+    - name: Compile SOCKS5 library test
+      run: |
+        c++ -std=c++17 -I include test/standalone_test.cc -o standalone_test
+        ./standalone_test
+    
+    - name: Compile Shadowsocks test
+      run: |
+        c++ -std=c++17 -I include test/ss_test.cc -o ss_test -lcrypto -lssl
+        # Note: This test requires network access to SS servers
+        # ./ss_test
+    
+    - name: Compile Cluster test
+      run: |
+        c++ -std=c++17 -I include test/cluster_test.cc -o cluster_test -lcrypto -lssl -pthread
+        # Note: Requires keys.json
+        # ./cluster_test
+
+  # Docker build for easier deployment
+  docker:
+    name: Build Docker Image
+    runs-on: ubuntu-22.04
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download Envoy binary
+      uses: actions/download-artifact@v4
+      with:
+        name: envoy-socks5-ss-${{ env.ENVOY_VERSION }}
+        path: artifacts/
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Build and push
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: |
+          ghcr.io/${{ github.repository }}:latest
+          ghcr.io/${{ github.repository }}:${{ env.ENVOY_VERSION }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
