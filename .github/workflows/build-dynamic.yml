@@ -2,7 +2,7 @@ name: Build SOCKS5-SS Proxy
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, feature/standalone-proxy]
   pull_request:
     branches: [main, master]
   workflow_dispatch:
