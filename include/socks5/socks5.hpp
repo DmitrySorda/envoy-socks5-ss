@@ -13,6 +13,7 @@
 #include <array>
 #include <stdexcept>
 #include <unordered_map>
+#include <algorithm>
 
 namespace socks5 {
 
