@@ -61,12 +61,17 @@ jobs:
     
     - name: Register extension
       run: |
-        # Add our extension to Envoy's extension list
-        cat >> envoy/source/extensions/extensions_build_config.bzl << 'EOF'
+        # Find the EXTENSIONS dict and add our extension inside it
+        # Look for "envoy.filters.network.tcp_proxy" and add our extension after it
+        cd envoy
         
-        # SOCKS5 + Shadowsocks extension (added by CI)
-        "envoy.filters.network.socks5_ss": "//source/extensions/filters/network/socks5_ss:config",
-        EOF
+        # Add to extensions_build_config.bzl using sed
+        # Insert before the closing of network filters section
+        sed -i '/envoy.filters.network.tcp_proxy/a\    "envoy.filters.network.socks5_ss": "//source/extensions/filters/network/socks5_ss:config",' \
+            source/extensions/extensions_build_config.bzl
+        
+        # Verify the extension was added
+        grep -n "socks5_ss" source/extensions/extensions_build_config.bzl || echo "Warning: Extension not found in config"
     
     - name: Build Envoy with extension
       working-directory: envoy

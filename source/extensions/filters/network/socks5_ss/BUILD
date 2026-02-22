@@ -11,15 +11,15 @@ envoy_extension_package()
 
 envoy_cc_library(
     name = "socks5_lib",
-    hdrs = ["//include/socks5:socks5.hpp"],
+    hdrs = ["socks5/socks5.hpp"],
     deps = [],
 )
 
 envoy_cc_library(
     name = "shadowsocks_lib",
     hdrs = [
-        "//include/shadowsocks:shadowsocks.hpp",
-        "//include/shadowsocks:ss_cluster.hpp",
+        "shadowsocks/shadowsocks.hpp",
+        "shadowsocks/ss_cluster.hpp",
     ],
     external_deps = ["ssl"],
     deps = [],
@@ -37,7 +37,6 @@ envoy_cc_extension(
     deps = [
         ":socks5_lib",
         ":shadowsocks_lib",
-        "//proto:socks5_ss_cc_proto",
         "@envoy//envoy/event:dispatcher_interface",
         "@envoy//envoy/event:timer_interface",
         "@envoy//envoy/network:connection_interface",
