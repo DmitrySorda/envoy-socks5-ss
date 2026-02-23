@@ -92,39 +92,6 @@ jobs:
         path: artifacts/
         retention-days: 30
 
-  # macOS Intel
-  build-macos-intel:
-    name: Build macOS (x86_64)
-    runs-on: macos-12
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install dependencies
-      run: brew install openssl@3
-    
-    - name: Build SOCKS5-SS proxy
-      run: |
-        mkdir -p artifacts
-        
-        clang++ -std=c++17 -O3 -pthread \
-          -I include \
-          -I $(brew --prefix openssl@3)/include \
-          -L $(brew --prefix openssl@3)/lib \
-          -o artifacts/socks5-ss-proxy \
-          src/socks5_ss_proxy.cc \
-          -lssl -lcrypto
-        
-        chmod +x artifacts/socks5-ss-proxy
-        ls -la artifacts/
-    
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: socks5-ss-proxy-macos-x86_64
-        path: artifacts/
-        retention-days: 30
-
   # Docker
   docker:
     name: Build Docker Image
@@ -182,7 +149,7 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-22.04
-    needs: [build-linux, build-macos, build-macos-intel]
+    needs: [build-linux, build-macos]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     
     steps:
@@ -193,7 +160,6 @@ jobs:
       run: |
         cd socks5-ss-proxy-linux-amd64 && tar -czvf ../socks5-ss-proxy-linux-amd64.tar.gz . && cd ..
         cd socks5-ss-proxy-macos-arm64 && tar -czvf ../socks5-ss-proxy-macos-arm64.tar.gz . && cd ..
-        cd socks5-ss-proxy-macos-x86_64 && tar -czvf ../socks5-ss-proxy-macos-x86_64.tar.gz . && cd ..
     
     - name: Create Release
       uses: softprops/action-gh-release@v1
@@ -201,5 +167,4 @@ jobs:
         files: |
           socks5-ss-proxy-linux-amd64.tar.gz
           socks5-ss-proxy-macos-arm64.tar.gz
-          socks5-ss-proxy-macos-x86_64.tar.gz
         generate_release_notes: true
