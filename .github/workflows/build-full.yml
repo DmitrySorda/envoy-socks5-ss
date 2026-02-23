@@ -14,8 +14,6 @@ jobs:
   build-envoy:
     name: Build Envoy with SOCKS5-SS Extension
     runs-on: ubuntu-22.04
-    container:
-      image: envoyproxy/envoy-build-ubuntu:latest
     
     steps:
     - name: Checkout filter repository
@@ -31,10 +29,45 @@ jobs:
         path: envoy
         fetch-depth: 1
     
+    - name: Free disk space
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/graalvm/ /usr/local/.ghcup/ \
+          /usr/local/share/boost /usr/local/lib/android /opt/ghc \
+          /usr/local/share/chrom* /usr/local/share/powershell /usr/share/swift
+        sudo apt-get clean
+        df -h /
+    
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          autoconf automake cmake curl libtool make ninja-build patch \
+          python3 python3-pip unzip virtualenv \
+          libssl-dev zlib1g-dev pkg-config
+        
+        # Install Bazelisk
+        curl -L -o /usr/local/bin/bazel \
+          "https://github.com/bazelbuild/bazelisk/releases/download/v1.25.0/bazelisk-linux-amd64"
+        chmod +x /usr/local/bin/bazel
+        bazel --version
+        
+        # Install LLVM/Clang (Envoy requires it)
+        wget https://apt.llvm.org/llvm.sh
+        chmod +x llvm.sh
+        sudo ./llvm.sh 18 all
+        
+        # Setup clang
+        sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-18 100
+        sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-18 100
+        sudo update-alternatives --install /usr/bin/lld lld /usr/bin/lld-18 100
+        sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-18 100
+        
+        clang --version
+    
     - name: Mount bazel cache
       uses: actions/cache@v4
       with:
-        path: /root/.cache/bazel
+        path: ~/.cache/bazel
         key: bazel-envoy-${{ env.ENVOY_VERSION }}-${{ github.sha }}
         restore-keys: |
           bazel-envoy-${{ env.ENVOY_VERSION }}-
@@ -82,13 +115,23 @@ jobs:
         # Show surrounding context
         grep -n -A1 -B1 "socks5_ss\|tcp_proxy" source/extensions/extensions_build_config.bzl
     
+    - name: Setup Envoy build
+      working-directory: envoy
+      run: |
+        # Use clang toolchain via Envoy's setup script if available
+        if [ -f "bazel/setup_clang.sh" ]; then
+          bazel/setup_clang.sh /usr/lib/llvm-18
+        fi
+    
     - name: Build Envoy with extension
       working-directory: envoy
       run: |
         bazel build \
+          --config=clang \
           --config=ci \
           --jobs=$(nproc) \
           --local_cpu_resources=$(nproc) \
+          --local_ram_resources="HOST_RAM*0.7" \
           //source/exe:envoy-static
       timeout-minutes: 360
     
