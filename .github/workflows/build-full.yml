@@ -46,9 +46,9 @@ jobs:
           libssl-dev zlib1g-dev pkg-config
         
         # Install Bazelisk
-        curl -L -o /usr/local/bin/bazel \
+        sudo curl -L -o /usr/local/bin/bazel \
           "https://github.com/bazelbuild/bazelisk/releases/download/v1.25.0/bazelisk-linux-amd64"
-        chmod +x /usr/local/bin/bazel
+        sudo chmod +x /usr/local/bin/bazel
         bazel --version
         
         # Install LLVM/Clang (Envoy requires it)
