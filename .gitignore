@@ -17,3 +17,4 @@ bazel-*
 
 # Test outputs
 test_output/
+socks5-ss-proxy
