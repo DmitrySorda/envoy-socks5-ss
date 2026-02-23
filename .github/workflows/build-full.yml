@@ -43,7 +43,8 @@ jobs:
         sudo apt-get install -y \
           autoconf automake cmake curl libtool make ninja-build patch \
           python3 python3-pip unzip virtualenv \
-          libssl-dev zlib1g-dev pkg-config
+          libssl-dev zlib1g-dev pkg-config \
+          libtinfo5 libncurses5
         
         # Install Bazelisk
         sudo curl -L -o /usr/local/bin/bazel \
