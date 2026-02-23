@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package envoy.extensions.filters.network.socks5_ss.v3;
+
+option java_package = "io.envoyproxy.envoy.extensions.filters.network.socks5_ss.v3";
+option java_outer_classname = "Socks5SsFilterProto";
+option java_multiple_files = true;
+option go_package = "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/socks5_ss/v3;socks5ssv3";
+
+import "google/protobuf/duration.proto";
+import "udpa/annotations/status.proto";
+import "validate/validate.proto";
+
+option (udpa.annotations.file_status).package_version_status = ACTIVE;
+
+// [#protodoc-title: SOCKS5 + Shadowsocks network filter]
+// SOCKS5 proxy with Shadowsocks upstream encryption.
+// [#extension: envoy.filters.network.socks5_ss]
+
+// Load balancing policy for Shadowsocks servers
+enum LbPolicy {
+  // Round robin selection
+  ROUND_ROBIN = 0;
+  
+  // Select server with fewest active connections
+  LEAST_CONNECTIONS = 1;
+  
+  // Random selection
+  RANDOM = 2;
+  
+  // Prefer servers with lowest measured latency (default)
+  WEIGHTED_LATENCY = 3;
+}
+
+// Configuration for the SOCKS5 + Shadowsocks network filter
+message Socks5SsFilter {
+  // The prefix to use when emitting statistics
+  string stat_prefix = 1 [(validate.rules).string = {min_len: 1}];
+
+  // Whether SOCKS5 authentication is required
+  bool auth_required = 2;
+
+  // Path to JSON file containing Shadowsocks server configurations
+  // File format: {"keys": [{"method": "...", "password": "...", "host": "...", "port": 8080, "tag": "..."}]}
+  // This file is monitored for changes and will be hot-reloaded
+  string servers_config_path = 3 [(validate.rules).string = {min_len: 1}];
+
+  // Load balancing policy for selecting upstream SS servers
+  LbPolicy lb_policy = 4;
+
+  // Interval between health checks for SS servers
+  // Default: 30 seconds
+  google.protobuf.Duration health_check_interval = 5;
+
+  // Interval between checking config file for changes
+  // Default: 60 seconds
+  google.protobuf.Duration config_reload_interval = 6;
+
+  // Connect timeout for upstream SS connections
+  // Default: 5 seconds
+  google.protobuf.Duration connect_timeout = 7;
+
+  // Idle timeout for established connections
+  // Default: 1 hour
+  google.protobuf.Duration idle_timeout = 8;
+}

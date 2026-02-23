@@ -1,7 +1,7 @@
 /// @file socks5_filter.cc
 /// @brief Envoy SOCKS5 Network Filter implementation
 
-#include "src/filter/socks5_filter.h"
+#include "socks5_filter.h"
 
 #include "envoy/network/connection.h"
 #include "source/common/network/address_impl.h"

@@ -1,15 +1,15 @@
 /// @file ss_config.cc
 /// @brief Envoy SOCKS5-SS filter factory
 
-#include "src/filter/ss_filter.h"
+#include "ss_filter.h"
 
 #include "envoy/registry/registry.h"
 #include "envoy/server/filter_config.h"
 
 #include "source/extensions/filters/network/common/factory_base.h"
 
-#include "proto/socks5_ss.pb.h"
-#include "proto/socks5_ss.pb.validate.h"
+#include "envoy/extensions/filters/network/socks5_ss/v3/socks5_ss.pb.h"
+#include "envoy/extensions/filters/network/socks5_ss/v3/socks5_ss.pb.validate.h"
 
 namespace Envoy {
 namespace Extensions {
@@ -29,7 +29,7 @@ public:
         Server::Configuration::FactoryContext& context) override {
         
         const auto& config = 
-            MessageUtil::downcastAndValidate<const socks5_ss::v3::Socks5SsFilter&>(
+            MessageUtil::downcastAndValidate<const envoy::extensions::filters::network::socks5_ss::v3::Socks5SsFilter&>(
                 proto_config, context.messageValidationVisitor());
         
         auto filter_config = std::make_shared<SsFilterConfig>();
@@ -39,16 +39,16 @@ public:
         
         // Parse LB policy
         switch (config.lb_policy()) {
-            case socks5_ss::v3::ROUND_ROBIN:
+            case envoy::extensions::filters::network::socks5_ss::v3::ROUND_ROBIN:
                 filter_config->lb_policy = shadowsocks::LbPolicy::RoundRobin;
                 break;
-            case socks5_ss::v3::LEAST_CONNECTIONS:
+            case envoy::extensions::filters::network::socks5_ss::v3::LEAST_CONNECTIONS:
                 filter_config->lb_policy = shadowsocks::LbPolicy::LeastConnections;
                 break;
-            case socks5_ss::v3::RANDOM:
+            case envoy::extensions::filters::network::socks5_ss::v3::RANDOM:
                 filter_config->lb_policy = shadowsocks::LbPolicy::Random;
                 break;
-            case socks5_ss::v3::WEIGHTED_LATENCY:
+            case envoy::extensions::filters::network::socks5_ss::v3::WEIGHTED_LATENCY:
             default:
                 filter_config->lb_policy = shadowsocks::LbPolicy::WeightedLatency;
                 break;
@@ -87,13 +87,12 @@ public:
     }
 
     ProtobufTypes::MessagePtr createEmptyConfigProto() override {
-        return std::make_unique<socks5_ss::v3::Socks5SsFilter>();
+        return std::make_unique<envoy::extensions::filters::network::socks5_ss::v3::Socks5SsFilter>();
     }
 };
 
-LEGACY_REGISTER_FACTORY(SsFilterConfigFactory,
-                        Server::Configuration::NamedNetworkFilterConfigFactory,
-                        FilterName);
+REGISTER_FACTORY(SsFilterConfigFactory,
+                        Server::Configuration::NamedNetworkFilterConfigFactory);
 
 } // namespace Socks5Ss
 } // namespace NetworkFilters

@@ -1,7 +1,7 @@
 /// @file ss_filter.cc
 /// @brief Envoy SOCKS5 + Shadowsocks Network Filter implementation
 
-#include "src/filter/ss_filter.h"
+#include "ss_filter.h"
 
 #include <fstream>
 #include <sstream>

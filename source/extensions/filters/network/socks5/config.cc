@@ -1,7 +1,7 @@
 /// @file config.cc
 /// @brief Envoy SOCKS5 filter factory implementation
 
-#include "src/filter/socks5_filter.h"
+#include "socks5_filter.h"
 
 #include "envoy/registry/registry.h"
 #include "envoy/server/filter_config.h"
