@@ -12,11 +12,17 @@
 #include <stdexcept>
 #include <cstring>
 
-// OpenSSL for crypto
+// Crypto — works with both BoringSSL (Envoy) and OpenSSL (standalone)
 #include <openssl/evp.h>
 #include <openssl/rand.h>
-#include <openssl/kdf.h>
 #include <openssl/err.h>
+
+#ifdef OPENSSL_IS_BORINGSSL
+#include <openssl/aead.h>
+#include <openssl/hkdf.h>
+#else
+#include <openssl/kdf.h>
+#endif
 
 namespace shadowsocks {
 
@@ -42,17 +48,33 @@ struct CipherInfo {
     size_t key_size;
     size_t salt_size;
     size_t nonce_size;
+#ifdef OPENSSL_IS_BORINGSSL
+    const EVP_AEAD* aead;
+#else
     const EVP_CIPHER* (*cipher_func)();
+#endif
 };
 
 inline CipherInfo get_cipher_info(CipherType type) {
     switch (type) {
         case CipherType::ChaCha20Poly1305:
+#ifdef OPENSSL_IS_BORINGSSL
+            return {type, 32, 32, 12, EVP_aead_chacha20_poly1305()};
+#else
             return {type, 32, 32, 12, EVP_chacha20_poly1305};
+#endif
         case CipherType::Aes256Gcm:
+#ifdef OPENSSL_IS_BORINGSSL
+            return {type, 32, 32, 12, EVP_aead_aes_256_gcm()};
+#else
             return {type, 32, 32, 12, EVP_aes_256_gcm};
+#endif
         case CipherType::Aes128Gcm:
+#ifdef OPENSSL_IS_BORINGSSL
+            return {type, 16, 16, 12, EVP_aead_aes_128_gcm()};
+#else
             return {type, 16, 16, 12, EVP_aes_128_gcm};
+#endif
     }
     throw std::runtime_error("Unknown cipher type");
 }
@@ -103,7 +125,15 @@ inline std::vector<uint8_t> derive_subkey(
 ) {
     // HKDF-SHA1 with info = "ss-subkey"
     std::vector<uint8_t> subkey(key_size);
-    
+
+#ifdef OPENSSL_IS_BORINGSSL
+    if (!HKDF(subkey.data(), key_size, EVP_sha1(),
+              psk.data(), psk.size(),
+              salt.data(), salt.size(),
+              reinterpret_cast<const uint8_t*>("ss-subkey"), 9)) {
+        throw std::runtime_error("HKDF derive failed");
+    }
+#else
     EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
     if (!ctx) throw std::runtime_error("HKDF context creation failed");
     
@@ -124,6 +154,7 @@ inline std::vector<uint8_t> derive_subkey(
     }
     
     EVP_PKEY_CTX_free(ctx);
+#endif
     return subkey;
 }
 
@@ -138,12 +169,40 @@ public:
         if (key.size() != info_.key_size) {
             throw std::runtime_error("Invalid key size");
         }
+#ifdef OPENSSL_IS_BORINGSSL
+        aead_ctx_ = EVP_AEAD_CTX_new(info_.aead, key_.data(), key_.size(),
+                                     AEAD_TAG_SIZE);
+        if (!aead_ctx_) throw std::runtime_error("AEAD context creation failed");
+#endif
     }
+
+    ~AeadCipher() {
+#ifdef OPENSSL_IS_BORINGSSL
+        if (aead_ctx_) EVP_AEAD_CTX_free(aead_ctx_);
+#endif
+    }
+
+    // Non-copyable, non-movable (use via unique_ptr)
+    AeadCipher(const AeadCipher&) = delete;
+    AeadCipher& operator=(const AeadCipher&) = delete;
+    AeadCipher(AeadCipher&&) = delete;
+    AeadCipher& operator=(AeadCipher&&) = delete;
     
     /// Encrypt plaintext, returns ciphertext + tag
     std::vector<uint8_t> encrypt(const std::vector<uint8_t>& plaintext) {
         std::vector<uint8_t> ciphertext(plaintext.size() + AEAD_TAG_SIZE);
-        
+
+#ifdef OPENSSL_IS_BORINGSSL
+        size_t ciphertext_len = 0;
+        if (!EVP_AEAD_CTX_seal(aead_ctx_, ciphertext.data(), &ciphertext_len,
+                               ciphertext.size(),
+                               nonce_.data(), nonce_.size(),
+                               plaintext.data(), plaintext.size(),
+                               nullptr, 0)) {
+            throw std::runtime_error("AEAD seal failed");
+        }
+        ciphertext.resize(ciphertext_len);
+#else
         EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
         if (!ctx) throw std::runtime_error("Cipher context creation failed");
         
@@ -169,7 +228,6 @@ public:
         }
         ciphertext_len += len;
         
-        // Get tag
         if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, AEAD_TAG_SIZE, 
                                 ciphertext.data() + ciphertext_len) != 1) {
             EVP_CIPHER_CTX_free(ctx);
@@ -177,9 +235,9 @@ public:
         }
         
         EVP_CIPHER_CTX_free(ctx);
-        increment_nonce();
-        
         ciphertext.resize(ciphertext_len + AEAD_TAG_SIZE);
+#endif
+        increment_nonce();
         return ciphertext;
     }
     
@@ -191,7 +249,18 @@ public:
         
         size_t ct_len = ciphertext.size() - AEAD_TAG_SIZE;
         std::vector<uint8_t> plaintext(ct_len);
-        
+
+#ifdef OPENSSL_IS_BORINGSSL
+        size_t plaintext_len = 0;
+        if (!EVP_AEAD_CTX_open(aead_ctx_, plaintext.data(), &plaintext_len,
+                               plaintext.size(),
+                               nonce_.data(), nonce_.size(),
+                               ciphertext.data(), ciphertext.size(),
+                               nullptr, 0)) {
+            throw std::runtime_error("AEAD open failed (auth failed)");
+        }
+        plaintext.resize(plaintext_len);
+#else
         EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
         if (!ctx) throw std::runtime_error("Cipher context creation failed");
         
@@ -211,7 +280,6 @@ public:
         }
         plaintext_len = len;
         
-        // Set tag
         if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, AEAD_TAG_SIZE,
                                 const_cast<uint8_t*>(ciphertext.data() + ct_len)) != 1) {
             EVP_CIPHER_CTX_free(ctx);
@@ -225,9 +293,9 @@ public:
         plaintext_len += len;
         
         EVP_CIPHER_CTX_free(ctx);
-        increment_nonce();
-        
         plaintext.resize(plaintext_len);
+#endif
+        increment_nonce();
         return plaintext;
     }
     
@@ -242,6 +310,9 @@ private:
     CipherInfo info_;
     std::vector<uint8_t> key_;
     std::vector<uint8_t> nonce_;
+#ifdef OPENSSL_IS_BORINGSSL
+    EVP_AEAD_CTX* aead_ctx_ = nullptr;
+#endif
 };
 
 // ============================================================================

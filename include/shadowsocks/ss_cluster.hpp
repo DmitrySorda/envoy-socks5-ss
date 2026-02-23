@@ -14,7 +14,7 @@
 #include <functional>
 #include <fstream>
 
-#include "shadowsocks/shadowsocks.hpp"
+#include "shadowsocks.hpp"
 
 namespace shadowsocks {
 
