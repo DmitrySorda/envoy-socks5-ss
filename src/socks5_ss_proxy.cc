@@ -257,8 +257,24 @@ private:
         platform_send(client_fd_, response.data(), response.size(), 0);
     }
     
+    // ── SS Frame Decoder (state machine to avoid nonce desync) ──────────
+    // SS AEAD stream: [salt][frame][frame]...
+    // Each frame: [enc_length (2+16 bytes)][enc_payload (payload_len+16 bytes)]
+    // We must NOT decrypt enc_length unless we can also decrypt enc_payload,
+    // otherwise the AEAD nonce counter gets out of sync.
+    // Solution: peek at the length using a checkpoint, or only decrypt when
+    // the full frame is available. Since we can't know payload_len without
+    // decrypting, we use a two-phase state machine.
+    enum class DecodeState { NEED_SALT, NEED_LENGTH, NEED_PAYLOAD };
+    
     void relay() {
         std::vector<uint8_t> buf(65536);
+        std::vector<uint8_t> upstream_pending;  // accumulation buffer for SS data
+        DecodeState dstate = DecodeState::NEED_SALT;
+        uint16_t pending_payload_len = 0;
+        const size_t ss_salt_size = server_->session->salt_size();
+        constexpr size_t TAG = 16;  // AEAD tag size
+        
         WSAPOLLFD fds[2]{};
         fds[0].fd = client_fd_;
         fds[0].events = POLLIN;
@@ -281,34 +297,64 @@ private:
                 if (platform_send(upstream_fd_, encrypted.data(), encrypted.size(), 0) < 0) break;
             }
             
-            // Upstream -> Client (decrypt)
+            // Upstream -> Client (decrypt via state machine)
             if (fds[1].revents & POLLIN) {
                 ssize_t n = platform_recv(upstream_fd_, buf.data(), buf.size(), 0);
                 if (n <= 0) break;
                 
-                // Initialize decryptor on first response if needed
-                if (!decryptor_) {
-                    // First response contains salt
-                    if (n < 32 + 2 + 16) {
-                        std::cerr << "Response too short" << std::endl;
-                        break;
+                upstream_pending.insert(upstream_pending.end(), buf.begin(), buf.begin() + n);
+                
+                // Process as many complete frames as possible
+                bool progress = true;
+                while (progress) {
+                    progress = false;
+                    
+                    if (dstate == DecodeState::NEED_SALT) {
+                        if (upstream_pending.size() >= ss_salt_size) {
+                            std::vector<uint8_t> salt(upstream_pending.begin(),
+                                                      upstream_pending.begin() + ss_salt_size);
+                            decryptor_ = server_->session->create_decryptor(salt);
+                            upstream_pending.erase(upstream_pending.begin(),
+                                                   upstream_pending.begin() + ss_salt_size);
+                            dstate = DecodeState::NEED_LENGTH;
+                            progress = true;
+                        }
                     }
-                    std::vector<uint8_t> salt(buf.begin(), buf.begin() + 32);
-                    decryptor_ = server_->session->create_decryptor(salt);
                     
-                    // Decrypt rest
-                    std::vector<uint8_t> encrypted(buf.begin() + 32, buf.begin() + n);
-                    auto decrypted = shadowsocks::Session::decode_payloads(*decryptor_, encrypted);
-                    
-                    if (!decrypted.empty()) {
-                        if (platform_send(client_fd_, decrypted.data(), decrypted.size(), 0) < 0) break;
+                    if (dstate == DecodeState::NEED_LENGTH) {
+                        if (upstream_pending.size() >= 2 + TAG) {
+                            // Decrypt the 2-byte length + tag
+                            std::vector<uint8_t> len_block(upstream_pending.begin(),
+                                                           upstream_pending.begin() + 2 + TAG);
+                            auto len_dec = decryptor_->decrypt(len_block);
+                            if (len_dec.size() != 2) {
+                                std::cerr << "Failed to decrypt length block" << std::endl;
+                                goto relay_done;
+                            }
+                            pending_payload_len = (static_cast<uint16_t>(len_dec[0]) << 8) | len_dec[1];
+                            upstream_pending.erase(upstream_pending.begin(),
+                                                   upstream_pending.begin() + 2 + TAG);
+                            dstate = DecodeState::NEED_PAYLOAD;
+                            progress = true;
+                        }
                     }
-                } else {
-                    std::vector<uint8_t> encrypted(buf.begin(), buf.begin() + n);
-                    auto decrypted = shadowsocks::Session::decode_payloads(*decryptor_, encrypted);
                     
-                    if (!decrypted.empty()) {
-                        if (platform_send(client_fd_, decrypted.data(), decrypted.size(), 0) < 0) break;
+                    if (dstate == DecodeState::NEED_PAYLOAD) {
+                        size_t need = pending_payload_len + TAG;
+                        if (upstream_pending.size() >= need) {
+                            std::vector<uint8_t> payload_block(upstream_pending.begin(),
+                                                               upstream_pending.begin() + need);
+                            auto payload_dec = decryptor_->decrypt(payload_block);
+                            upstream_pending.erase(upstream_pending.begin(),
+                                                   upstream_pending.begin() + need);
+                            
+                            if (!payload_dec.empty()) {
+                                if (platform_send(client_fd_, payload_dec.data(),
+                                                  payload_dec.size(), 0) < 0) goto relay_done;
+                            }
+                            dstate = DecodeState::NEED_LENGTH;
+                            progress = true;
+                        }
                     }
                 }
             }
@@ -320,6 +366,7 @@ private:
             }
         }
         
+        relay_done:
         cluster_.release_connection(server_, true);
     }
     
