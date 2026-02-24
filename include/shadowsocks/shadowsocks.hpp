@@ -4,6 +4,12 @@
 /// @brief Shadowsocks AEAD encryption (chacha20-ietf-poly1305, aes-256-gcm, aes-128-gcm)
 /// @see https://shadowsocks.org/doc/aead.html
 
+#ifdef _WIN32
+  #ifndef NOMINMAX
+    #define NOMINMAX
+  #endif
+#endif
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -11,6 +17,7 @@
 #include <memory>
 #include <stdexcept>
 #include <cstring>
+#include <algorithm>
 
 // Crypto — works with both BoringSSL (Envoy) and OpenSSL (standalone)
 #include <openssl/evp.h>

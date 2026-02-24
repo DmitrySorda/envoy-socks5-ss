@@ -14,6 +14,9 @@
 // Platform abstraction
 // ============================================================================
 #ifdef _WIN32
+  #ifndef NOMINMAX
+    #define NOMINMAX
+  #endif
   #ifndef WIN32_LEAN_AND_MEAN
     #define WIN32_LEAN_AND_MEAN
   #endif
@@ -27,6 +30,14 @@
 
   inline int  poll(WSAPOLLFD* fds, unsigned long nfds, int timeout) { return WSAPoll(fds, nfds, timeout); }
   inline void close_socket(int fd) { closesocket(fd); }
+
+  // MSVC recv/send expect char*, wrap for uint8_t* buffers
+  inline ssize_t platform_recv(int fd, uint8_t* buf, size_t len, int flags) {
+      return recv(fd, reinterpret_cast<char*>(buf), static_cast<int>(len), flags);
+  }
+  inline ssize_t platform_send(int fd, const uint8_t* buf, size_t len, int flags) {
+      return send(fd, reinterpret_cast<const char*>(buf), static_cast<int>(len), flags);
+  }
 
   struct WinsockInit {
       WinsockInit()  { WSADATA d; WSAStartup(MAKEWORD(2,2), &d); }
@@ -43,6 +54,13 @@
 
   inline void close_socket(int fd) { close(fd); }
   using WSAPOLLFD = struct pollfd;
+
+  inline ssize_t platform_recv(int fd, uint8_t* buf, size_t len, int flags) {
+      return recv(fd, buf, len, flags);
+  }
+  inline ssize_t platform_send(int fd, const uint8_t* buf, size_t len, int flags) {
+      return send(fd, buf, len, flags);
+  }
 
   struct WinsockInit {};  // no-op on POSIX
 #endif
@@ -97,7 +115,7 @@ private:
     bool doSocks5Handshake() {
         // Receive method selection
         std::vector<uint8_t> buf(256);
-        ssize_t n = recv(client_fd_, buf.data(), buf.size(), 0);
+        ssize_t n = platform_recv(client_fd_, buf.data(), buf.size(), 0);
         if (n <= 0) return false;
         
         socks5::MethodSelectionRequest methods;
@@ -111,7 +129,7 @@ private:
         socks5::MethodSelectionResponse response;
         response.method = socks5::AuthMethod::NoAuth;
         auto response_data = response.serialize();
-        send(client_fd_, response_data.data(), response_data.size(), 0);
+        platform_send(client_fd_, response_data.data(), response_data.size(), 0);
         
         // Receive request (or use remaining data from first recv)
         std::vector<uint8_t> req_buf;
@@ -120,7 +138,7 @@ private:
             req_buf.assign(buf.begin() + consumed, buf.begin() + n);
         } else {
             req_buf.resize(256);
-            n = recv(client_fd_, req_buf.data(), req_buf.size(), 0);
+            n = platform_recv(client_fd_, req_buf.data(), req_buf.size(), 0);
             if (n <= 0) return false;
             req_buf.resize(n);
         }
@@ -211,7 +229,7 @@ private:
         first_packet.insert(first_packet.end(), salt_.begin(), salt_.end());
         first_packet.insert(first_packet.end(), encrypted_header.begin(), encrypted_header.end());
         
-        if (send(upstream_fd_, first_packet.data(), first_packet.size(), 0) < 0) {
+        if (platform_send(upstream_fd_, first_packet.data(), first_packet.size(), 0) < 0) {
             std::cerr << "Failed to send SS header" << std::endl;
             return false;
         }
@@ -226,7 +244,7 @@ private:
         reply.bind_port = 0;
         
         auto response = reply.serialize();
-        send(client_fd_, response.data(), response.size(), 0);
+        platform_send(client_fd_, response.data(), response.size(), 0);
     }
     
     void sendSocks5Error(socks5::Reply code) {
@@ -236,7 +254,7 @@ private:
         reply.bind_port = 0;
         
         auto response = reply.serialize();
-        send(client_fd_, response.data(), response.size(), 0);
+        platform_send(client_fd_, response.data(), response.size(), 0);
     }
     
     void relay() {
@@ -254,18 +272,18 @@ private:
             
             // Client -> Upstream (encrypt)
             if (fds[0].revents & POLLIN) {
-                ssize_t n = recv(client_fd_, buf.data(), buf.size(), 0);
+                ssize_t n = platform_recv(client_fd_, buf.data(), buf.size(), 0);
                 if (n <= 0) break;
                 
                 std::vector<uint8_t> data(buf.begin(), buf.begin() + n);
                 auto encrypted = shadowsocks::Session::encode_payload(*encryptor_, data);
                 
-                if (send(upstream_fd_, encrypted.data(), encrypted.size(), 0) < 0) break;
+                if (platform_send(upstream_fd_, encrypted.data(), encrypted.size(), 0) < 0) break;
             }
             
             // Upstream -> Client (decrypt)
             if (fds[1].revents & POLLIN) {
-                ssize_t n = recv(upstream_fd_, buf.data(), buf.size(), 0);
+                ssize_t n = platform_recv(upstream_fd_, buf.data(), buf.size(), 0);
                 if (n <= 0) break;
                 
                 // Initialize decryptor on first response if needed
@@ -283,14 +301,14 @@ private:
                     auto decrypted = shadowsocks::Session::decode_payloads(*decryptor_, encrypted);
                     
                     if (!decrypted.empty()) {
-                        if (send(client_fd_, decrypted.data(), decrypted.size(), 0) < 0) break;
+                        if (platform_send(client_fd_, decrypted.data(), decrypted.size(), 0) < 0) break;
                     }
                 } else {
                     std::vector<uint8_t> encrypted(buf.begin(), buf.begin() + n);
                     auto decrypted = shadowsocks::Session::decode_payloads(*decryptor_, encrypted);
                     
                     if (!decrypted.empty()) {
-                        if (send(client_fd_, decrypted.data(), decrypted.size(), 0) < 0) break;
+                        if (platform_send(client_fd_, decrypted.data(), decrypted.size(), 0) < 0) break;
                     }
                 }
             }

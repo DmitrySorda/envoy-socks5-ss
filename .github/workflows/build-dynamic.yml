@@ -116,19 +116,21 @@ jobs:
       shell: cmd
       run: |
         mkdir artifacts
-        cl /std:c++17 /O2 /EHsc /D_WIN32 /Fe:artifacts\socks5-ss-proxy.exe ^
+        cl /std:c++17 /O2 /EHsc /DNOMINMAX /D_WIN32 /Fe:artifacts\socks5-ss-proxy.exe ^
           /I include ^
           /I "%VCPKG_INSTALLATION_ROOT%\installed\x64-windows-static\include" ^
           src\socks5_ss_proxy.cc ^
           /link /LIBPATH:"%VCPKG_INSTALLATION_ROOT%\installed\x64-windows-static\lib" ^
           libssl.lib libcrypto.lib ws2_32.lib advapi32.lib crypt32.lib user32.lib
+        if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
         
         dir artifacts\
     
     - name: Run tests
       shell: cmd
       run: |
-        cl /std:c++17 /EHsc /I include test\standalone_test.cc /Fe:standalone_test.exe
+        cl /std:c++17 /EHsc /DNOMINMAX /I include test\standalone_test.cc /Fe:standalone_test.exe
+        if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
         standalone_test.exe
     
     - name: Upload artifacts
