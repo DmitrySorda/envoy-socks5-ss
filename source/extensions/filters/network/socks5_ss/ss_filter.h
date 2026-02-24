@@ -136,6 +136,10 @@ private:
     bool salt_sent_{false};
     bool received_salt_{false};
     
+    // Upstream decode state — buffers partial SS AEAD frames across onUpstreamData calls
+    std::vector<uint8_t> upstream_pending_;
+    shadowsocks::Session::DecodeContext decode_ctx_;
+    
     // Target from SOCKS5 request
     std::string target_host_;
     uint16_t target_port_{0};

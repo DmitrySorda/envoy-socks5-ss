@@ -325,57 +325,48 @@ void SsFilter::onUpstreamConnected() {
 }
 
 void SsFilter::onUpstreamData(Buffer::Instance& data) {
-    std::vector<uint8_t> raw_data(data.length());
-    data.copyOut(0, data.length(), raw_data.data());
-    data.drain(data.length());
+    // Append incoming data to persistent buffer
+    size_t incoming = data.length();
+    size_t old_size = upstream_pending_.size();
+    upstream_pending_.resize(old_size + incoming);
+    data.copyOut(0, incoming, upstream_pending_.data() + old_size);
+    data.drain(incoming);
     
-    bytes_received_ += raw_data.size();
-    config_->stats->bytes_received_.add(raw_data.size());
+    bytes_received_ += incoming;
+    config_->stats->bytes_received_.add(incoming);
     
-    size_t offset = 0;
-    
-    // First response contains salt
+    // Extract salt from first response
     if (!received_salt_) {
         size_t salt_size = selected_server_->session->salt_size();
-        if (raw_data.size() < salt_size) {
-            ENVOY_LOG(warn, "SOCKS5-SS: incomplete salt received");
-            return;
+        if (upstream_pending_.size() < salt_size) {
+            ENVOY_LOG(debug, "SOCKS5-SS: waiting for full salt ({}/{})",
+                      upstream_pending_.size(), salt_size);
+            return;  // wait for more data
         }
         
-        std::vector<uint8_t> server_salt(raw_data.begin(), raw_data.begin() + salt_size);
+        std::vector<uint8_t> server_salt(upstream_pending_.begin(),
+                                          upstream_pending_.begin() + salt_size);
         decryptor_ = selected_server_->session->create_decryptor(server_salt);
         received_salt_ = true;
-        offset = salt_size;
+        upstream_pending_.erase(upstream_pending_.begin(),
+                                upstream_pending_.begin() + salt_size);
     }
     
-    // Decrypt remaining data
-    if (offset < raw_data.size()) {
-        std::vector<uint8_t> encrypted(raw_data.begin() + offset, raw_data.end());
+    // Decode AEAD frames using stateful context (handles partial frames safely)
+    if (upstream_pending_.empty()) return;
+    
+    try {
+        auto plaintext = shadowsocks::Session::decode_payloads(
+            *decryptor_, upstream_pending_, decode_ctx_);
         
-        // AEAD chunk: length(2) + tag(16) + payload + tag(16)
-        if (encrypted.size() >= 2 + 16) {
-            try {
-                // Decrypt length
-                std::vector<uint8_t> len_chunk(encrypted.begin(), encrypted.begin() + 2 + 16);
-                auto len_dec = decryptor_->decrypt(len_chunk);
-                size_t payload_len = (len_dec[0] << 8) | len_dec[1];
-                
-                size_t payload_start = 2 + 16;
-                if (encrypted.size() >= payload_start + payload_len + 16) {
-                    std::vector<uint8_t> payload_chunk(
-                        encrypted.begin() + payload_start,
-                        encrypted.begin() + payload_start + payload_len + 16);
-                    
-                    auto plaintext = decryptor_->decrypt(payload_chunk);
-                    
-                    Buffer::OwnedImpl client_buf;
-                    client_buf.add(plaintext.data(), plaintext.size());
-                    read_callbacks_->connection().write(client_buf, false);
-                }
-            } catch (const std::exception& e) {
-                ENVOY_LOG(warn, "SOCKS5-SS: decryption failed: {}", e.what());
-            }
+        if (!plaintext.empty()) {
+            Buffer::OwnedImpl client_buf;
+            client_buf.add(plaintext.data(), plaintext.size());
+            read_callbacks_->connection().write(client_buf, false);
         }
+    } catch (const std::exception& e) {
+        ENVOY_LOG(warn, "SOCKS5-SS: decryption failed: {}", e.what());
+        read_callbacks_->connection().close(Network::ConnectionCloseType::NoFlush);
     }
 }
 
