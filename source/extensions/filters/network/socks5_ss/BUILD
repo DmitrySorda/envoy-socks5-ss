@@ -49,6 +49,7 @@ envoy_cc_extension(
         "//source/common/buffer:buffer_lib",
         "//source/common/common:logger_lib",
         "//source/common/network:address_lib",
+        "//source/common/network:raw_buffer_socket_lib",
         "//source/common/network:utility_lib",
         "//source/extensions/filters/network/common:factory_base_lib",
     ],

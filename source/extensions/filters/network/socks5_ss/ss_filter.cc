@@ -3,12 +3,19 @@
 
 #include "ss_filter.h"
 
+#include <arpa/inet.h>
+#include <fcntl.h>
 #include <fstream>
+#include <netinet/in.h>
+#include <poll.h>
 #include <sstream>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "envoy/network/connection.h"
 #include "source/common/network/address_impl.h"
+#include "source/common/network/raw_buffer_socket.h"
 #include "source/common/network/utility.h"
 
 namespace Envoy {
@@ -23,8 +30,8 @@ namespace Socks5Ss {
 SsFilter::SsFilter(SsFilterConfigSharedPtr config)
     : config_(std::move(config)) {
     ENVOY_LOG(debug, "SOCKS5-SS filter created");
-    config_->stats->connections_total.inc();
-    config_->stats->active_connections.inc();
+    config_->stats->connections_total_.inc();
+    config_->stats->active_connections_.inc();
 }
 
 SsFilter::~SsFilter() {
@@ -32,7 +39,7 @@ SsFilter::~SsFilter() {
 }
 
 void SsFilter::cleanup() {
-    config_->stats->active_connections.dec();
+    config_->stats->active_connections_.dec();
     
     if (selected_server_) {
         config_->cluster->record_bytes(selected_server_, bytes_sent_, bytes_received_);
@@ -72,7 +79,7 @@ Network::FilterStatus SsFilter::onData(Buffer::Instance& data, bool end_stream) 
         upstream_connection_->write(send_buf, end_stream);
         
         bytes_sent_ += encrypted.size();
-        config_->stats->bytes_sent.add(encrypted.size());
+        config_->stats->bytes_sent_.add(encrypted.size());
         
         return Network::FilterStatus::StopIteration;
     }
@@ -187,10 +194,10 @@ void SsFilter::handleAuthentication(Buffer::Instance& data) {
     read_callbacks_->connection().write(reply_buf, false);
     
     if (authenticated) {
-        config_->stats->auth_success.inc();
+        config_->stats->auth_success_.inc();
         state_ = State::AwaitingRequest;
     } else {
-        config_->stats->auth_failed.inc();
+        config_->stats->auth_failed_.inc();
         read_callbacks_->connection().close(Network::ConnectionCloseType::FlushWrite);
         state_ = State::Error;
     }
@@ -258,7 +265,7 @@ void SsFilter::connectToSsServer() {
     upstream_connection_ = read_callbacks_->connection().dispatcher().createClientConnection(
         address,
         Network::Address::InstanceConstSharedPtr{},
-        Network::Test::createRawBufferSocket(),
+        std::make_unique<Network::RawBufferSocket>(),
         nullptr,
         nullptr);
     
@@ -271,8 +278,8 @@ void SsFilter::onUpstreamConnected() {
     auto elapsed = std::chrono::steady_clock::now() - connect_start_;
     auto latency_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
     
-    config_->stats->upstream_latency_ms.recordValue(latency_ms);
-    config_->stats->upstream_connect_success.inc();
+    config_->stats->upstream_latency_ms_.recordValue(latency_ms);
+    config_->stats->upstream_connect_success_.inc();
     
     ENVOY_LOG(debug, "SOCKS5-SS: upstream connected in {}ms", latency_ms);
     
@@ -299,7 +306,7 @@ void SsFilter::onUpstreamConnected() {
     // Send SOCKS5 success reply
     sendSocksReply(socks5::Reply::Succeeded);
     state_ = State::Connected;
-    config_->stats->connections_success.inc();
+    config_->stats->connections_success_.inc();
     
     // Forward any pending data
     if (pending_data_.length() > 0) {
@@ -323,7 +330,7 @@ void SsFilter::onUpstreamData(Buffer::Instance& data) {
     data.drain(data.length());
     
     bytes_received_ += raw_data.size();
-    config_->stats->bytes_received.add(raw_data.size());
+    config_->stats->bytes_received_.add(raw_data.size());
     
     size_t offset = 0;
     
@@ -386,7 +393,7 @@ void SsFilter::sendSocksReply(socks5::Reply reply) {
 }
 
 void SsFilter::closeWithError(socks5::Reply reply) {
-    config_->stats->connections_failed.inc();
+    config_->stats->connections_failed_.inc();
     sendSocksReply(reply);
     read_callbacks_->connection().close(Network::ConnectionCloseType::FlushWrite);
     state_ = State::Error;
@@ -398,7 +405,7 @@ void SsFilter::onEvent(Network::ConnectionEvent event) {
     } else if (event == Network::ConnectionEvent::RemoteClose ||
                event == Network::ConnectionEvent::LocalClose) {
         if (state_ == State::ConnectingUpstream) {
-            config_->stats->upstream_connect_failed.inc();
+            config_->stats->upstream_connect_failed_.inc();
             closeWithError(socks5::Reply::ConnectionRefused);
         }
         cleanup();
@@ -462,7 +469,7 @@ void ConfigManager::onReloadTimer() {
     
     // Update healthy servers gauge
     auto stats = config_->cluster->get_stats();
-    config_->stats->healthy_servers.set(stats.healthy_servers);
+    config_->stats->healthy_servers_.set(stats.healthy_servers);
     
     // Re-arm timer
     reload_timer_->enableTimer(config_->config_reload_interval);
@@ -514,7 +521,7 @@ bool ConfigManager::checkServerHealth(const shadowsocks::ServerConfig& server,
     inet_pton(AF_INET, server.host.c_str(), &addr.sin_addr);
     
     auto start = std::chrono::steady_clock::now();
-    connect(sock, (struct sockaddr*)&addr, sizeof(addr));
+    connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
     
     struct pollfd pfd = {sock, POLLOUT, 0};
     int ret = poll(&pfd, 1, 5000); // 5 second timeout
