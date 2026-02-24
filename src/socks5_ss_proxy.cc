@@ -346,7 +346,8 @@ public:
         }
         
         int opt = 1;
-        setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR,
+                   reinterpret_cast<const char*>(&opt), sizeof(opt));
         
         struct sockaddr_in addr{};
         addr.sin_family = AF_INET;
