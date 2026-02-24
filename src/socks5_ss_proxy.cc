@@ -9,13 +9,43 @@
 #include <csignal>
 #include <cstring>
 #include <vector>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <poll.h>
+
+// ============================================================================
+// Platform abstraction
+// ============================================================================
+#ifdef _WIN32
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #pragma comment(lib, "ws2_32.lib")
+
+  using ssize_t  = int;
+  using socklen_t = int;
+  #define SHUT_RDWR SD_BOTH
+
+  inline int  poll(WSAPOLLFD* fds, unsigned long nfds, int timeout) { return WSAPoll(fds, nfds, timeout); }
+  inline void close_socket(int fd) { closesocket(fd); }
+
+  struct WinsockInit {
+      WinsockInit()  { WSADATA d; WSAStartup(MAKEWORD(2,2), &d); }
+      ~WinsockInit() { WSACleanup(); }
+  };
+#else
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <netdb.h>
+  #include <unistd.h>
+  #include <fcntl.h>
+  #include <poll.h>
+
+  inline void close_socket(int fd) { close(fd); }
+  using WSAPOLLFD = struct pollfd;
+
+  struct WinsockInit {};  // no-op on POSIX
+#endif
 
 #include "socks5/socks5.hpp"
 #include "shadowsocks/shadowsocks.hpp"
@@ -35,8 +65,8 @@ public:
         : client_fd_(client_fd), cluster_(cluster) {}
     
     ~Connection() {
-        if (client_fd_ >= 0) close(client_fd_);
-        if (upstream_fd_ >= 0) close(upstream_fd_);
+        if (client_fd_ >= 0) close_socket(client_fd_);
+        if (upstream_fd_ >= 0) close_socket(upstream_fd_);
     }
     
     void handle() {
@@ -155,7 +185,7 @@ private:
         if (connect(upstream_fd_, res->ai_addr, res->ai_addrlen) < 0) {
             std::cerr << "Failed to connect to SS server " << server_->host << ":" << server_->port << std::endl;
             freeaddrinfo(res);
-            close(upstream_fd_);
+            close_socket(upstream_fd_);
             upstream_fd_ = -1;
             cluster_.release_connection(server_, false);
             return false;
@@ -211,7 +241,7 @@ private:
     
     void relay() {
         std::vector<uint8_t> buf(65536);
-        struct pollfd fds[2];
+        WSAPOLLFD fds[2]{};
         fds[0].fd = client_fd_;
         fds[0].events = POLLIN;
         fds[1].fd = upstream_fd_;
@@ -305,13 +335,13 @@ public:
         addr.sin_port = htons(listen_port);
         inet_pton(AF_INET, listen_addr.c_str(), &addr.sin_addr);
         
-        if (bind(server_fd_, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-            close(server_fd_);
+        if (bind(server_fd_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
+            close_socket(server_fd_);
             throw std::runtime_error("Failed to bind: " + std::string(strerror(errno)));
         }
         
         if (listen(server_fd_, 128) < 0) {
-            close(server_fd_);
+            close_socket(server_fd_);
             throw std::runtime_error("Failed to listen");
         }
         
@@ -319,17 +349,19 @@ public:
     }
     
     ~ProxyServer() {
-        if (server_fd_ >= 0) close(server_fd_);
+        if (server_fd_ >= 0) close_socket(server_fd_);
     }
     
     void run() {
         while (g_running) {
-            struct pollfd pfd{server_fd_, POLLIN, 0};
+            WSAPOLLFD pfd{};
+            pfd.fd = server_fd_;
+            pfd.events = POLLIN;
             if (poll(&pfd, 1, 1000) <= 0) continue;
             
             struct sockaddr_in client_addr{};
             socklen_t len = sizeof(client_addr);
-            int client_fd = accept(server_fd_, (struct sockaddr*)&client_addr, &len);
+            int client_fd = accept(server_fd_, reinterpret_cast<struct sockaddr*>(&client_addr), &len);
             if (client_fd < 0) continue;
             
             // Handle in separate thread
@@ -385,7 +417,11 @@ int main(int argc, char* argv[]) {
     // Setup signal handler
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+#ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);
+#endif
+    
+    WinsockInit wsa;  // initializes Winsock on Windows, no-op on POSIX
     
     try {
         // Load cluster from keys.json
