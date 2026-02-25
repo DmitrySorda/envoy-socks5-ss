@@ -79,11 +79,9 @@ int main(int argc, char* argv[]) {
     
     std::cout << "\n--- Running Health Checks ---" << std::endl;
     
-    // Start health checks
-    cluster.start_health_checks(tcp_health_check);
-    
-    // Wait for first health check
-    std::this_thread::sleep_for(std::chrono::seconds(2));
+    // Run one synchronous health-check pass (start_health_checks is now a
+    // no-op; async checks are driven by Envoy's Dispatcher in production).
+    cluster.run_health_check_iteration(tcp_health_check);
     
     // Print server stats
     auto server_stats = cluster.get_server_stats();
@@ -117,8 +115,6 @@ int main(int argc, char* argv[]) {
     std::cout << "  Total servers: " << stats.total_servers << std::endl;
     std::cout << "  Healthy servers: " << stats.healthy_servers << std::endl;
     std::cout << "  Total connections: " << stats.total_connections << std::endl;
-    
-    cluster.stop_health_checks();
     
     std::cout << "\n=== Test Complete ===" << std::endl;
     
