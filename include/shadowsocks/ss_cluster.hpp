@@ -10,7 +10,6 @@
 #include <atomic>
 #include <chrono>
 #include <random>
-#include <thread>
 #include <functional>
 #include <fstream>
 
@@ -80,12 +79,13 @@ public:
         std::chrono::milliseconds health_check_timeout{5000};
         uint32_t unhealthy_threshold = 3;
         uint32_t healthy_threshold = 1;
+        uint32_t max_connections_per_server = 0; // 0 = unlimited (circuit breaker)
     };
     
-    Cluster() : config_(), rr_index_(0), running_(false) {}
+    Cluster() : config_(), rr_index_(0) {}
     
     explicit Cluster(const Config& config) 
-        : config_(config), rr_index_(0), running_(false) {}
+        : config_(config), rr_index_(0) {}
     
     ~Cluster() {
         stop_health_checks();
@@ -112,12 +112,16 @@ public:
         
         if (servers_.empty()) return nullptr;
         
-        // Get list of healthy servers
+        // Get list of healthy servers (respecting circuit breaker)
         std::vector<size_t> healthy_indices;
         for (size_t i = 0; i < servers_.size(); ++i) {
-            if (health_[i]->healthy.load()) {
-                healthy_indices.push_back(i);
+            if (!health_[i]->healthy.load()) continue;
+            // Circuit breaker: skip servers at capacity
+            if (config_.max_connections_per_server > 0 &&
+                health_[i]->active_connections.load() >= config_.max_connections_per_server) {
+                continue;
             }
+            healthy_indices.push_back(i);
         }
         
         if (healthy_indices.empty()) {
@@ -201,25 +205,37 @@ public:
         }
     }
     
-    /// Start background health checks
-    void start_health_checks(std::function<bool(const ServerConfig&, uint64_t&)> checker) {
-        if (running_.exchange(true)) return;
-        
-        health_check_thread_ = std::thread([this, checker]() {
-            while (running_.load()) {
-                run_health_checks(checker);
-                std::this_thread::sleep_for(config_.health_check_interval);
-            }
-        });
+    /// Run one iteration of health checks (called by external async timer).
+    /// @param checker  callback: (server, out_latency) -> healthy?
+    void run_health_check_iteration(
+        std::function<bool(const ServerConfig&, uint64_t&)> checker) {
+        run_health_checks(std::move(checker));
     }
-    
-    /// Stop health checks
-    void stop_health_checks() {
-        running_.store(false);
-        if (health_check_thread_.joinable()) {
-            health_check_thread_.join();
+
+    /// Update a single server's health (async callback path)
+    void update_server_health(size_t index, bool healthy, uint64_t latency_ms_val) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (index >= health_.size()) return;
+        health_[index]->last_check = std::chrono::steady_clock::now();
+        if (healthy) {
+            health_[index]->latency_ms.store(latency_ms_val);
+            health_[index]->last_success = std::chrono::steady_clock::now();
+            health_[index]->healthy.store(true);
+        } else {
+            health_[index]->healthy.store(false);
         }
     }
+
+    /// Get server config by index (for async HC loop)
+    const ServerConfig* server_at(size_t index) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (index >= servers_.size()) return nullptr;
+        return &servers_[index];
+    }
+
+    /// Legacy start/stop — now no-ops (health checks driven by external timer)
+    void start_health_checks(std::function<bool(const ServerConfig&, uint64_t&)> /*checker*/) {}
+    void stop_health_checks() {}
     
     /// Get cluster statistics
     struct Stats {
@@ -345,8 +361,6 @@ private:
     std::vector<ServerConfig> servers_;
     std::vector<std::unique_ptr<ServerHealth>> health_;
     std::atomic<size_t> rr_index_;
-    std::atomic<bool> running_;
-    std::thread health_check_thread_;
 };
 
 // ============================================================================

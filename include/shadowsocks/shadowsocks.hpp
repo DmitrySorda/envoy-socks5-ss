@@ -197,14 +197,19 @@ public:
     
     /// Encrypt plaintext, returns ciphertext + tag
     std::vector<uint8_t> encrypt(const std::vector<uint8_t>& plaintext) {
-        std::vector<uint8_t> ciphertext(plaintext.size() + AEAD_TAG_SIZE);
+        return encrypt(plaintext.data(), plaintext.size());
+    }
+
+    /// Encrypt from raw pointer (zero-copy path)
+    std::vector<uint8_t> encrypt(const uint8_t* plaintext_data, size_t plaintext_len) {
+        std::vector<uint8_t> ciphertext(plaintext_len + AEAD_TAG_SIZE);
 
 #ifdef OPENSSL_IS_BORINGSSL
         size_t ciphertext_len = 0;
         if (!EVP_AEAD_CTX_seal(aead_ctx_, ciphertext.data(), &ciphertext_len,
                                ciphertext.size(),
                                nonce_.data(), nonce_.size(),
-                               plaintext.data(), plaintext.size(),
+                               plaintext_data, plaintext_len,
                                nullptr, 0)) {
             throw std::runtime_error("AEAD seal failed");
         }
@@ -223,7 +228,7 @@ public:
         }
         
         if (EVP_EncryptUpdate(ctx, ciphertext.data(), &len, 
-                              plaintext.data(), plaintext.size()) != 1) {
+                              plaintext_data, static_cast<int>(plaintext_len)) != 1) {
             EVP_CIPHER_CTX_free(ctx);
             throw std::runtime_error("Encrypt update failed");
         }
@@ -357,15 +362,24 @@ public:
         AeadCipher& cipher, 
         const std::vector<uint8_t>& data
     ) {
+        return encode_payload(cipher, data.data(), data.size());
+    }
+
+    /// Encode AEAD chunk from raw pointer (zero-copy path)
+    static std::vector<uint8_t> encode_payload(
+        AeadCipher& cipher,
+        const uint8_t* data,
+        size_t len
+    ) {
         // Length prefix (2 bytes big-endian) + tag
         std::vector<uint8_t> len_buf = {
-            static_cast<uint8_t>((data.size() >> 8) & 0xFF),
-            static_cast<uint8_t>(data.size() & 0xFF)
+            static_cast<uint8_t>((len >> 8) & 0xFF),
+            static_cast<uint8_t>(len & 0xFF)
         };
         auto len_enc = cipher.encrypt(len_buf);
         
         // Payload + tag
-        auto payload_enc = cipher.encrypt(data);
+        auto payload_enc = cipher.encrypt(data, len);
         
         // Concatenate
         std::vector<uint8_t> result;

@@ -63,4 +63,12 @@ message Socks5SsFilter {
   // Idle timeout for established connections
   // Default: 1 hour
   google.protobuf.Duration idle_timeout = 8;
+
+  // Maximum number of retry attempts when upstream connect fails.
+  // Each retry selects a different server. Default: 2
+  uint32 max_retries = 9;
+
+  // Maximum concurrent connections per Shadowsocks server (circuit breaker).
+  // 0 means no limit. Default: 0
+  uint32 max_connections_per_server = 10;
 }
