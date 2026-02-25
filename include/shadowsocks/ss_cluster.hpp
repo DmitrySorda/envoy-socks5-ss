@@ -266,7 +266,7 @@ public:
     }
     
     /// Acquire connection (increment active count) - used when connection is being made
-    void acquire_connection(ServerConfig* server) {
+    void acquire_connection(ServerConfig* /*server*/) {
         // Already done in select_server, but can be used for external tracking
     }
     
