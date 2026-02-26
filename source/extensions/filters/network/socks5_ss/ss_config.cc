@@ -92,7 +92,7 @@ private:
 
     // Config manager owns the hot-reload timer and async health checks.
     auto config_manager = std::make_shared<ConfigManager>(
-        context.mainThreadDispatcher(), filter_config,
+        context.serverFactoryContext().mainThreadDispatcher(), filter_config,
         filter_config->servers_config_path);
 
     return [filter_config,
